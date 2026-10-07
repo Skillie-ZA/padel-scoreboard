@@ -1,17 +1,20 @@
 // ===============================================
 // Padel Scoreboard V1.1 - ESP32-C6 Main Board
 // Based on V2.0 + v1.1 remote protocol
-// GPIO 6 = WS2812 matrix | GPIO 7 = mode button / wake
-// GPIO 23 = LED driver EN (LOW during sleep) | GPIO 0 = battery ADC
-// Board button: <1s = cycle score colors | 1-3s = deathmatch | 3s+ = sleep
+// GPIO 6 = WS2812 matrix | GPIO 7 = mode button
+// GPIO 23 = LED driver EN (held HIGH) | GPIO 0 = battery ADC
+// Board button: <1s = cycle score colors | 1-3s = deathmatch | 3s+ = blackout
+// Blackout keeps ESP-NOW up. One yellow/green pixel hops; the rest of the matrix is off.
+// No deep sleep or Wi-Fi power save.
 // Color modes: 0 both white | 1 blue/red teams | 2+ shared rainbow
 // ESP-NOW: 0 score, 1 undo, 99 reset, 100 battery, 101 sleep, 102 deathmatch
+// Wi-Fi STA MAC is this chip's own address, printed on Serial at boot.
+// Remotes stay paired to whichever board they were hardcoded for.
 // ===============================================
 
 #include <FastLED.h>
 #include <WiFi.h>
 #include <esp_now.h>
-#include <esp_sleep.h>
 
 #define LED_PIN 6
 #define BUTTON_PIN 7
@@ -29,9 +32,9 @@
 #define BOARD_BATTERY_X 5
 #define REMOTE_BATTERY_RIGHT_X 11
 #define BATTERY_READ_INTERVAL 60000
-#define INACTIVITY_TIMEOUT 1200000  // 20 minutes
 #define DEATHMATCH_HOLD_MS 1000
-#define SLEEP_HOLD_MS 3000
+#define BLACKOUT_HOLD_MS 3000
+#define BLACKOUT_HOP_MS 500
 #define DM_MAX_SECONDS 3600         // 60 minutes
 
 #define COLOR_MODE_WHITE 0
@@ -113,6 +116,11 @@ bool matchOver = false;
 int winner = -1;
 
 bool deathMatchMode = false;
+bool blackout = false;
+int blackoutX = 0;
+int blackoutY = 0;
+bool blackoutGreen = false;
+unsigned long lastBlackoutHop = 0;
 uint8_t colorMode = 0;
 unsigned long dmStartTime = 0;
 int dmSeconds = 0;
@@ -122,7 +130,6 @@ int batteryPercent[2] = {-1,-1};
 bool remoteSleep[2] = {false,false};
 int boardBatteryPercent = 0;
 unsigned long lastBoardBatteryRead = 0;
-unsigned long lastActivity = 0;
 
 struct Message { uint8_t cmd, team, data; };
 
@@ -155,7 +162,6 @@ void resetAll();
 // ================== FUNCTIONS ==================
 
 void onReceive(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
-  lastActivity = millis();
   Message msg; memcpy(&msg, data, sizeof(msg));
   int t = msg.team-1; if(t<0||t>1) return;
   Serial.printf("ESP-NOW cmd=%u team=%u data=%u\n", msg.cmd, msg.team, msg.data);
@@ -181,8 +187,10 @@ void onReceive(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
       }
       break;
   }
-  drawMainScreen();
-  FastLED.show();
+  if (!blackout) {
+    drawMainScreen();
+    FastLED.show();
+  }
 }
 
 int getBoardBatteryPercent() {
@@ -513,6 +521,7 @@ void handleGameWon(int team) {
       inTiebreak = true;
     }
   }
+  if (blackout) return;
   if (matchOver) {
     drawMatchOverScreen();
     FastLED.show();
@@ -551,9 +560,9 @@ void scorePoint(int team) {
       deuceCount++;
     }
   }
-  flashTeamColor(team);
+  if (!blackout) flashTeamColor(team);
   if (wonGame) handleGameWon(team);
-  else {
+  else if (!blackout) {
     drawMainScreen();
     FastLED.show();
   }
@@ -668,13 +677,19 @@ void padelPixelPanelAndAnimation() {
   delay(1000);
 }
 
-void enterDeepSleep() {
-  esp_deep_sleep_enable_gpio_wakeup(1ULL << BUTTON_PIN, ESP_GPIO_WAKEUP_GPIO_LOW);
-  fill_solid(leds, NUM_LEDS, blackColor);
+void hopBlackoutPixel() {
+  int nx = random(MATRIX_WIDTH);
+  int ny = random(MATRIX_HEIGHT);
+  if (nx == blackoutX && ny == blackoutY) {
+    nx = (nx + 1 + random(MATRIX_WIDTH - 1)) % MATRIX_WIDTH;
+  }
+  blackoutX = nx;
+  blackoutY = ny;
+  blackoutGreen = !blackoutGreen;
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  leds[getLED(blackoutX, blackoutY)] = blackoutGreen ? CRGB::Green : CRGB::Yellow;
   FastLED.show();
-  delay(50);
-  digitalWrite(DRIVER_EN_PIN, LOW);
-  esp_deep_sleep_start();
+  lastBlackoutHop = millis();
 }
 
 void handleButton() {
@@ -690,10 +705,15 @@ void handleButton() {
   if (!pressed && buttonPressed) {
     unsigned long duration = millis() - pressStart;
     buttonPressed = false;
-    lastActivity = millis();
 
-    if (duration >= SLEEP_HOLD_MS) {
-      enterDeepSleep();
+    if (duration >= BLACKOUT_HOLD_MS) {
+      blackout = !blackout;
+      Serial.println(blackout ? "Blackout on" : "Blackout off");
+      if (blackout) hopBlackoutPixel();
+      else {
+        drawMainScreen();
+        FastLED.show();
+      }
     } else if (duration >= DEATHMATCH_HOLD_MS) {
       deathMatchMode = !deathMatchMode;
       if (deathMatchMode) {
@@ -701,9 +721,11 @@ void handleButton() {
         dmSeconds = 0;
         resetAll();
       }
-      drawMainScreen();
-      FastLED.show();
-    } else if (duration > 50) {
+      if (!blackout) {
+        drawMainScreen();
+        FastLED.show();
+      }
+    } else if (duration > 50 && !blackout) {
       colorMode = (colorMode + 1) % NUM_COLOR_MODES;
       drawMainScreen();
       FastLED.show();
@@ -736,20 +758,17 @@ void setup() {
   FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
   FastLED.setBrightness(BRIGHTNESS);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
-  esp_deep_sleep_enable_gpio_wakeup(1ULL << BUTTON_PIN, ESP_GPIO_WAKEUP_GPIO_LOW);
 
   boardBatteryPercent = getBoardBatteryPercent();
   lastBoardBatteryRead = millis();
-  lastActivity = millis();
 
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  randomSeed(esp_random());
   printNetworkAddress();
 
-  bool wokeFromSleep = (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_UNDEFINED);
-  if (!wokeFromSleep) {
-    rainbowAnimation();
-    padelPixelPanelAndAnimation();
-  }
+  rainbowAnimation();
+  padelPixelPanelAndAnimation();
 
   esp_now_init();
   esp_now_register_recv_cb(onReceive);
@@ -768,14 +787,10 @@ void loop() {
 
   handleButton();
 
-  if (millis() - lastActivity > INACTIVITY_TIMEOUT) {
-    enterDeepSleep();
-  }
-
   if (millis() - lastBoardBatteryRead > BATTERY_READ_INTERVAL) {
     boardBatteryPercent = getBoardBatteryPercent();
     lastBoardBatteryRead = millis();
-    if (!matchOver) {
+    if (!matchOver && !blackout) {
       drawMainScreen();
       FastLED.show();
     }
@@ -786,9 +801,15 @@ void loop() {
     int elapsedSec = (elapsed > DM_MAX_SECONDS) ? DM_MAX_SECONDS : (int)elapsed;
     if (elapsedSec != dmSeconds) {
       dmSeconds = elapsedSec;
-      drawMainScreen();
-      FastLED.show();
+      if (!blackout) {
+        drawMainScreen();
+        FastLED.show();
+      }
     }
+  }
+
+  if (blackout && millis() - lastBlackoutHop >= BLACKOUT_HOP_MS) {
+    hopBlackoutPixel();
   }
   delay(100);
 }

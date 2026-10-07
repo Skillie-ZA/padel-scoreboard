@@ -20,8 +20,8 @@ The sketches talk over ESP-NOW. No Wi-Fi router is required. v1.1 remotes are ha
 
 **Scoreboard (ESP32-C6)**
 - 16×16 WS2812B matrix on **GPIO 6** (256 LEDs)
-- Mode button / wake on **GPIO 7**
-- LED driver enable on **GPIO 23** (driven LOW in sleep)
+- Mode button on **GPIO 7**
+- LED driver enable on **GPIO 23** (held HIGH; this board does not sleep)
 - Battery ADC on **GPIO 0**
 
 **Remote (ESP32-C6, one unit per team)**
@@ -37,8 +37,8 @@ ESP32-C6 can only wake from deep sleep on GPIO 0–7. Button 1 (GPIO 6) is the w
 Same v1.1 remote protocol. The board prints its own MAC on Serial. Remotes already aimed at that MAC stay paired. Do not paste this board's MAC into a remote that belongs to a different scoreboard.
 
 **Wiring**
-- 8×32 WS2812B (256 LEDs) data on **GPIO 6**
-- Mode button on **GPIO 7**, switch to GND. This pin also wakes the board
+- 8×32 WS2812B (256 LEDs) data on **GPIO 20**
+- Mode button on **GPIO 5**, switch to GND. This pin also wakes the board from deep sleep
 - No LED-driver enable pin and no on-board battery ADC
 
 The strip is column serpentine. LED 0 is the top of the leftmost column. The first 8 LEDs run down that full left column. Odd columns run bottom to top, so the wire continues along the bottom (bottom left, then bottom right) and ends toward the top right.
@@ -51,11 +51,9 @@ Blue is the left half, starting at the top left. Left to right the screen is: bl
 |---|---|
 | Short (&lt; 1 s) | Cycle score colours |
 | 1–3 s | Toggle deathmatch |
-| 3 s+ | Sleep (wake on GPIO 7) |
+| 3 s+ | Deep sleep (wake on GPIO 5) |
 
-It also sleeps after **40 minutes** with no scoring, undo, reset, deathmatch, or button press. Remote battery reports do not keep it awake.
-
-An ESP32-C3 can only wake from true deep sleep on GPIO 0–5. GPIO 7 is not one of those pins, so this sketch uses light sleep with Wi-Fi stopped. The panel is off, and the button still wakes the same match. Deep sleep on this chip would ignore GPIO 7 until power was unplugged.
+It also deep-sleeps after **40 minutes** with no scoring, undo, reset, deathmatch, or button press. Remote battery reports do not keep it awake. Wake reboots the board and clears the match. GPIO 5 is used because an ESP32-C3 can only deep-sleep-wake on GPIO 0–5.
 
 ```bash
 arduino-cli compile --upload -p /dev/cu.usbmodem101 \
@@ -69,7 +67,7 @@ arduino-cli compile --upload -p /dev/cu.usbmodem101 \
 |---|---|
 | Short (&lt; 1 s) | Cycle score colours |
 | 1–3 s | Toggle deathmatch |
-| 3 s+ | Sleep (wake on GPIO 7) |
+| 3 s+ | Blackout. One yellow/green pixel hops, and ESP-NOW stays up. Press again to restore the scores. |
 
 Colour cycle:
 

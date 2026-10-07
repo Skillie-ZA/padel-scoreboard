@@ -3,14 +3,10 @@
 // Same v1.1 remote protocol. This chip's own MAC is printed on Serial.
 // Remotes already hardcoded for this board keep working. Do not retarget them.
 //
-// GPIO 6 = WS2812 data | GPIO 7 = mode button and wake
-// Button: <1s cycle colours | 1-3s deathmatch | 3s+ sleep
-// Sleep also after 40 minutes with no play. Battery pings do not keep it awake.
-//
-// ESP32-C3 can deep-sleep-wake only on GPIO 0-5. GPIO 7 is not one of those
-// pads, so sleep is light sleep with Wi-Fi stopped: the panel is off, and
-// pressing GPIO 7 wakes the same match. A real deep sleep here would ignore
-// the button until a power cycle.
+// GPIO 20 = WS2812 data | GPIO 5 = mode button and deep-sleep wake
+// Button: <1s cycle colours | 1-3s deathmatch | 3s+ deep sleep
+// Deep sleep also after 40 minutes with no play. Battery pings do not keep it awake.
+// GPIO 5 is an RTC pin, so a press to GND wakes the chip. The match resets on wake.
 //
 // Matrix: 8 high x 32 wide, 256 LEDs. Column serpentine, top-left is LED 0.
 // First 8 LEDs are the full left column, top to bottom. Odd columns run
@@ -28,10 +24,11 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <esp_sleep.h>
-#include <driver/gpio.h>
+#include <soc/soc.h>
+#include <soc/rtc_cntl_reg.h>
 
-#define LED_PIN 6
-#define BUTTON_PIN 7
+#define LED_PIN 20
+#define BUTTON_PIN 5
 #define NUM_LEDS 256
 #define MATRIX_WIDTH 32
 #define MATRIX_HEIGHT 8
@@ -427,23 +424,34 @@ void drawMainScreen() {
   if (matchOver) { drawMatchOverScreen(); return; }
   drawFadedBackground();
   if (deathMatchMode) {
+    // Outer pairs are the scores. Inner pairs are the clock.
+    // The tens minute stays blank until 10:00, but its column is reserved.
+    // The colon owns the two centre columns, so scores and seconds do not move.
+    const int y = 1;
+    int p0 = points[0]; if (p0 < 0) p0 = 0; if (p0 > 99) p0 = 99;
+    int p1 = points[1]; if (p1 < 0) p1 = 0; if (p1 > 99) p1 = 99;
+    char buf1[3]; sprintf(buf1, "%02d", p0);
+    char buf2[3]; sprintf(buf2, "%02d", p1);
+    drawSmallText(0, y, buf1, deathTeam1Color);
+
     int m = dmSeconds / 60;
     int s = dmSeconds % 60;
-    char buf1[3]; sprintf(buf1, "%02d", points[0]);
-    char buf2[3]; sprintf(buf2, "%02d", points[1]);
-    drawSmallText(0, 1, buf1, deathTeam1Color);
-    drawSmallDigit(8, 1, m / 10, deathTeam1Color);
-    drawSmallDigit(12, 1, m % 10, deathTeam1Color);
-    leds[getLED(16, 2)] = whiteColor;
-    leds[getLED(16, 4)] = whiteColor;
-    drawSmallDigit(18, 1, s / 10, deathTeam2Color);
-    drawSmallDigit(22, 1, s % 10, deathTeam2Color);
-    drawSmallText(25, 1, buf2, deathTeam2Color);
+    if (m > 99) m = 99;
+    if (m >= 10) drawSmallDigit(8, y, m / 10, greenColor);
+    drawSmallDigit(12, y, m % 10, greenColor);
+    leds[getLED(15, y + 1)] = greenColor;
+    leds[getLED(16, y + 1)] = greenColor;
+    leds[getLED(15, y + 3)] = greenColor;
+    leds[getLED(16, y + 3)] = greenColor;
+    drawSmallDigit(17, y, s / 10, greenColor);
+    drawSmallDigit(21, y, s % 10, greenColor);
+
+    drawSmallText(25, y, buf2, deathTeam2Color);
   } else {
     drawGameDigit(1, 0, games[0][currentSet], getScoreColor(0));
     drawSmallText(8, 1, getPointStr(0), getScoreColor(0));
-    drawSmallText(16, 1, getPointStr(1), getScoreColor(1));
-    drawGameDigit(25, 0, games[1][currentSet], getScoreColor(1));
+    drawSmallText(17, 1, getPointStr(1), getScoreColor(1));
+    drawGameDigit(26, 0, games[1][currentSet], getScoreColor(1));
   }
   drawAllBatteryBars();
 }
@@ -451,7 +459,7 @@ void drawMainScreen() {
 void drawSetScores() {
   for (int set = 0; set < 3; set++) {
     drawSmallDigit(2 + set * 4, 1, games[0][set], getSetScoreColor(0, set));
-    drawSmallDigit(18 + set * 4, 1, games[1][set], getSetScoreColor(1, set));
+    drawSmallDigit(19 + set * 4, 1, games[1][set], getSetScoreColor(1, set));
   }
 }
 
@@ -692,24 +700,14 @@ void enterSleep() {
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   while (digitalRead(BUTTON_PIN) == LOW) delay(20);
 
-  esp_now_deinit();
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-
-  gpio_set_direction((gpio_num_t)BUTTON_PIN, GPIO_MODE_INPUT);
-  gpio_pullup_en((gpio_num_t)BUTTON_PIN);
-  gpio_wakeup_enable((gpio_num_t)BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
-  esp_sleep_enable_gpio_wakeup();
-
-  Serial.println("Sleeping. Press the button (GPIO 7) to wake.");
+  Serial.println("Deep sleep. Press the button (GPIO 5) to wake.");
   Serial.flush();
-  esp_light_sleep_start();
-
-  gpio_wakeup_disable((gpio_num_t)BUTTON_PIN);
-  startRadio();
-  lastActivity = millis();
-  drawMainScreen();
-  FastLED.show();
+  esp_err_t err = esp_deep_sleep_enable_gpio_wakeup(1ULL << BUTTON_PIN, ESP_GPIO_WAKEUP_GPIO_LOW);
+  if (err != ESP_OK) {
+    Serial.printf("GPIO wakeup refused: %d\n", (int)err);
+    return;
+  }
+  esp_deep_sleep_start();
 }
 
 void handleButton() {
@@ -746,6 +744,20 @@ void handleButton() {
   }
 }
 
+// The detector is already armed when this runs, which is before setup.
+// A panel still latched on from the last image sags the rail and the
+// stock handler resets the chip before setup can send black.
+extern "C" void esp_brownout_init(void) {
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+}
+
+static void enableBrownout() {
+  uint32_t reg = RTC_CNTL_BROWN_OUT_ENA | RTC_CNTL_BROWN_OUT_RST_ENA;
+  reg |= (0x3FFu << RTC_CNTL_BROWN_OUT_RST_WAIT_S);
+  reg |= (1u << RTC_CNTL_BROWN_OUT_INT_WAIT_S);
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, reg);
+}
+
 void printNetworkAddress() {
   Serial.println();
   Serial.println("=== Padel Scoreboard Wide 8x32 ===");
@@ -759,33 +771,98 @@ void printNetworkAddress() {
   Serial.println("Paste the array into the remote sketch to hardcode this master.");
 }
 
+const uint8_t (*glyphFor(char ch))[3] {
+  switch (ch) {
+    case 'P': return letterP_5x3;
+    case 'A': return letterA_5x3;
+    case 'D': return letterD_5x3;
+    case 'E': return letterE_5x3;
+    case 'L': return letterL_5x3;
+    case 'I': return letterI_5x3;
+    case 'X': return letterX_5x3;
+    default: return nullptr;
+  }
+}
+
+// "PADEL PIXEL" scrolls in from the right and off the left.
+// Each lit pixel keeps one random rainbow colour for the whole pass.
+void scrollPadelPixel() {
+  struct Lit {
+    int8_t x;
+    int8_t y;
+    CRGB color;
+  };
+  Lit px[96];
+  int n = 0;
+  const char text[] = "PADEL PIXEL";
+  int cursor = 0;
+  bool gap = false;
+  for (int i = 0; text[i] != '\0'; i++) {
+    if (text[i] == ' ') {
+      cursor += 3;
+      gap = false;
+      continue;
+    }
+    const uint8_t (*glyph)[3] = glyphFor(text[i]);
+    if (!glyph) continue;
+    if (gap) cursor += 1;
+    gap = true;
+    for (int row = 0; row < 5; row++) {
+      for (int col = 0; col < 3; col++) {
+        if (!glyph[row][col] || n >= 96) continue;
+        px[n].x = cursor + col;
+        px[n].y = row;
+        px[n].color = CHSV(random(256), 255, 255);
+        n++;
+      }
+    }
+    cursor += 3;
+  }
+
+  const int y0 = 1;
+  for (int shift = MATRIX_WIDTH; shift >= -cursor; --shift) {
+    fill_solid(leds, NUM_LEDS, CRGB::Black);
+    for (int i = 0; i < n; i++) {
+      int x = shift + px[i].x;
+      int y = y0 + px[i].y;
+      if ((unsigned)x >= MATRIX_WIDTH || (unsigned)y >= MATRIX_HEIGHT) continue;
+      leds[getLED(x, y)] = px[i].color;
+    }
+    FastLED.show();
+    delay(60);
+  }
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  FastLED.show();
+}
+
 void setup() {
+  // Clear a latched panel before anything else. Only the letter pixels
+  // light during the scroll, so the rail is not asked to drive a full panel.
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+  FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
+  FastLED.setBrightness(BRIGHTNESS);
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  FastLED.show();
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  randomSeed(esp_random());
+  scrollPadelPixel();
+
   Serial.begin(115200);
   unsigned long serialWait = millis();
   while (!Serial && millis() - serialWait < 3000) delay(10);
   delay(100);
 
-  FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
-  FastLED.setBrightness(BRIGHTNESS);
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-
   lastBoardBatteryRead = millis();
   lastActivity = millis();
-  randomSeed(esp_random());
 
   startRadio();
   printNetworkAddress();
 
-  rainbowAnimation();
-  fill_solid(leds, NUM_LEDS, CRGB::Black);
-  for (int x = 0; x < 16; x++) for (int y = 0; y < MATRIX_HEIGHT; y++) leds[getLED(x, y)] = team1Color;
-  for (int x = 16; x < MATRIX_WIDTH; x++) for (int y = 0; y < MATRIX_HEIGHT; y++) leds[getLED(x, y)] = team2Color;
-  FastLED.show();
-  delay(400);
-
   resetAll();
   drawMainScreen();
   FastLED.show();
+  delay(50);
+  enableBrownout();
   printNetworkAddress();
 }
 

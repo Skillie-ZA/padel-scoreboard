@@ -15,7 +15,12 @@
 #include <esp_now.h>
 #include <esp_sleep.h>
 
-#define TEAM 1                    // Change to 2 for the red remote
+#define TEAM 2                    // 1 = blue remote, 2 = red remote
+// Wide 8x32 scoreboard.
+// Blue remote flashed 2026-10-07: FC:01:2C:EB:D7:20
+// Red remote flashed 2026-10-07: FC:01:2C:EE:30:70
+// Earlier pair for FC:01:2C:EB:E9:AC was left as-is:
+//   blue FC:01:2C:EE:34:04, red FC:01:2C:EC:11:E8
 
 #define BUTTON1_PIN 6
 #define BUTTON2_PIN 20
@@ -31,9 +36,9 @@
 CRGB led[NUM_LEDS];
 CRGB teamColor = (TEAM == 1) ? CRGB(0, 30, 255) : CRGB(255, 10, 20);
 
-// Paste the scoreboard MAC printed on its Serial boot log.
-// Connected master MAC (this session): FC:01:2C:EC:3F:48
-uint8_t scoreboardAddress[] = {0xFC, 0x01, 0x2C, 0xEC, 0x3F, 0x48};
+// Wide 8x32 only. Wi-Fi STA MAC read from that ESP32-C3.
+// ESP-NOW uses this 6-byte STA MAC, not an EUI-64 form.
+uint8_t scoreboardAddress[] = {0x1C, 0xDB, 0xD4, 0x34, 0x85, 0xBC};
 
 struct Message {
   uint8_t cmd;

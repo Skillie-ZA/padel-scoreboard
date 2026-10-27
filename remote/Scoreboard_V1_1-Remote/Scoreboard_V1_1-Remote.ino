@@ -16,7 +16,16 @@
 #include <esp_sleep.h>
 
 #define TEAM 2                    // 1 = blue remote, 2 = red remote
-// Wide 8x32 scoreboard.
+// Wide 8x32 ESP32-C3 flashed 2026-10-20: 1C:DB:D4:33:66:50
+// Previous wide 8x32: 1C:DB:D4:34:85:BC
+// 16x16 ESP32-C3 scoreboard, flashed 2026-10-17: 1C:DB:D4:33:66:D0
+// Previous 16x16 C3 (2026-10-12): 1C:DB:D4:38:5A:98
+// Blue remote flashed 2026-10-20, base MAC: 10:BD:A3:A6:20:C8
+// Red remote flashed 2026-10-20, base MAC: 10:BD:A3:A6:46:94
+// Earlier blue remote base MAC: 10:BD:A3:A6:16:88
+// Earlier red remote base MAC: 10:BD:A3:A6:2B:FC
+// Earlier blue remote base MAC: FC:01:2C:EE:34:A8
+// Earlier red remote base MAC: FC:01:2C:EE:30:A4
 // Blue remote flashed 2026-10-07: FC:01:2C:EB:D7:20
 // Red remote flashed 2026-10-07: FC:01:2C:EE:30:70
 // Earlier pair for FC:01:2C:EB:E9:AC was left as-is:
@@ -36,9 +45,9 @@
 CRGB led[NUM_LEDS];
 CRGB teamColor = (TEAM == 1) ? CRGB(0, 30, 255) : CRGB(255, 10, 20);
 
-// Wide 8x32 only. Wi-Fi STA MAC read from that ESP32-C3.
+// Wide 8x32 ESP32-C3 flashed 2026-10-20. Wi-Fi STA MAC read from that board.
 // ESP-NOW uses this 6-byte STA MAC, not an EUI-64 form.
-uint8_t scoreboardAddress[] = {0x1C, 0xDB, 0xD4, 0x34, 0x85, 0xBC};
+uint8_t scoreboardAddress[] = {0x1C, 0xDB, 0xD4, 0x33, 0x66, 0x50};
 
 struct Message {
   uint8_t cmd;

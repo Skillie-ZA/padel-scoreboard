@@ -2,15 +2,16 @@
 
 ESP-NOW padel scoreboard and handheld remote.
 
-Current release: **v1.1**. v1.0 remains in the tree for reference.
+Current release: **v1.2**. v1.1 and v1.0 remain in the tree for reference.
 
 ## What’s in this repo
 
 | Version | Part | Board | Sketch |
 |---|---|---|---|
+| **v1.2** | 16×16 scoreboard | ESP32-C3 | `board/ScoreBoard_16x16_C3/` |
+| **v1.2** | Wide 8×32 scoreboard | ESP32-C3 | `board/ScoreBoard_Wide_8x32/` |
 | **v1.1** | Scoreboard | ESP32-C6 | `board/ScoreBoard_V1_1-Board/` |
 | **v1.1** | Remote (one per team) | ESP32-C6 | `remote/Scoreboard_V1_1-Remote/` |
-| **Wide 8×32** | Scoreboard | ESP32-C3 | `board/ScoreBoard_Wide_8x32/` |
 | v1.0 | Scoreboard | ESP32-C3 | `board/ScoreBoard_V1_Final-Board/` |
 | v1.0 | Remote (one for both teams) | ESP32-C6 | `remote/Scoreboard_Final_V1-Remote/` |
 
@@ -32,18 +33,39 @@ The sketches talk over ESP-NOW. No Wi-Fi router is required. v1.1 remotes are ha
 
 ESP32-C6 can only wake from deep sleep on GPIO 0–7. Button 1 (GPIO 6) is the wake button. Button 2 (GPIO 20) cannot wake the chip.
 
+## 16×16 display (ESP32-C3)
+
+Same v1.1 remote protocol and the same scoring rules as the ESP32-C6 board. This build has no LED-driver enable pin. A 3 s+ press blacks out. It does not sleep.
+
+**Wiring**
+- 16×16 WS2812B (256 LEDs) data on **GPIO 6**
+- Mode button on **GPIO 5**, switch to GND
+- Battery ADC on **GPIO 0**
+
+Two yellow dots mark the server, on the outer column. Player 1 is the top two pixels. Player 2 is the pair between the game digit and the points. At 0-0 the first score press only chooses that side’s player 1. Service then changes each game. In a tie-break the due server serves one point, then each player serves two. The dots stay off in deathmatch and until a server has been chosen.
+
+```bash
+arduino-cli compile --upload -p /dev/cu.usbmodem101 \
+  --fqbn "esp32:esp32:esp32c3:CDCOnBoot=cdc,UploadSpeed=921600" \
+  board/ScoreBoard_16x16_C3
+```
+
 ## Wide display (ESP32-C3, 8×32)
 
 Same v1.1 remote protocol. The board prints its own MAC on Serial. Remotes already aimed at that MAC stay paired. Do not paste this board's MAC into a remote that belongs to a different scoreboard.
 
 **Wiring**
-- 8×32 WS2812B (256 LEDs) data on **GPIO 20**
+- 8×32 WS2812B (256 LEDs) data on **GPIO 6**
 - Mode button on **GPIO 5**, switch to GND. This pin also wakes the board from deep sleep
 - No LED-driver enable pin and no on-board battery ADC
 
 The strip is column serpentine. LED 0 is the top of the leftmost column. The first 8 LEDs run down that full left column. Odd columns run bottom to top, so the wire continues along the bottom (bottom left, then bottom right) and ends toward the top right.
 
 Blue is the left half, starting at the top left. Left to right the screen is: blue game, blue points, red points, red game.
+
+Two orange dots mark the server, in the outer column of that side. Player 1 is the top two pixels. Player 2 is the two pixels just above that side’s battery. At 0-0 the first score press only chooses that side’s player 1. Service then changes each game. In a tie-break the due server serves one point, then each player serves two.
+
+Boot scrolls PADEL PIXEL, then holds PADEL and PIXEL centred for 1.5 seconds each.
 
 **Button**
 
@@ -139,3 +161,4 @@ arduino-cli compile --upload -p /dev/cu.usbmodem101 \
 | **v1.0** | C3 scoreboard + one two-button C6 remote for both teams |
 | **v1.1** | C6 V2 scoreboard: white-first colours, 20 ms team flash, undo/deathmatch from remote, MAC on Serial; per-team remotes with v1.1 buttons, 5 s breathe, GPIO wake |
 | **wide-8x32** | C3 wide scoreboard: 8×32 column-serpentine matrix, same v1.1 remotes, 40-minute sleep, GPIO 7 wake |
+| **v1.2** | 16×16 ESP32-C3 (GPIO 6 matrix, GPIO 5 button, yellow serve dots, blackout) and wide 8×32 (GPIO 6 matrix, GPIO 5 wake, orange serve dots, PADEL then PIXEL after the boot scroll). Remotes stay on the v1.1 protocol |

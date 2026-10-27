@@ -1,9 +1,9 @@
 // ===============================================
-// Padel Scoreboard Wide 8x32 - ESP32-C3
+// Padel Scoreboard Wide 8x32 v1.2 - ESP32-C3
 // Same v1.1 remote protocol. This chip's own MAC is printed on Serial.
 // Remotes already hardcoded for this board keep working. Do not retarget them.
 //
-// GPIO 20 = WS2812 data | GPIO 5 = mode button and deep-sleep wake
+// GPIO 6 = WS2812 data | GPIO 5 = mode button and deep-sleep wake
 // Button: <1s cycle colours | 1-3s deathmatch | 3s+ deep sleep
 // Deep sleep also after 40 minutes with no play. Battery pings do not keep it awake.
 // GPIO 5 is an RTC pin, so a press to GND wakes the chip. The match resets on wake.
@@ -15,6 +15,11 @@
 //
 // Screen, left to right, blue at the top left:
 //   cols 0-7 blue game | 8-15 blue points | 16-23 red points | 24-31 red game
+// Serve: two orange dots in the outer column of the serving side.
+//   Player 1 is the top two pixels. Player 2 is the two pixels just above that side's battery.
+//   At 0-0 the first score press only starts that side's player 1. It does not add a point.
+//   Service then changes each game. In a tie-break the due server serves one point,
+//   then each player serves two in the same order.
 // Color modes: 0 both white | 1 blue/red teams | 2+ shared rainbow
 // ESP-NOW: 0 score, 1 undo, 99 reset, 100 battery, 101 sleep, 102 deathmatch
 // ===============================================
@@ -27,7 +32,7 @@
 #include <soc/soc.h>
 #include <soc/rtc_cntl_reg.h>
 
-#define LED_PIN 20
+#define LED_PIN 6
 #define BUTTON_PIN 5
 #define NUM_LEDS 256
 #define MATRIX_WIDTH 32
@@ -137,6 +142,9 @@ int winner = -1;
 
 bool deathMatchMode = false;
 uint8_t colorMode = 0;
+int serveTeam = 0;
+int servePlayer[2] = {0, 0};
+bool serveChosen = false;
 unsigned long dmStartTime = 0;
 int dmSeconds = 0;
 
@@ -161,6 +169,9 @@ struct GameState {
   int winner;
   bool deathMatchMode;
   int dmSeconds;
+  int serveTeam;
+  int servePlayer[2];
+  bool serveChosen;
 };
 GameState history[HISTORY_LEN];
 int historyCount = 0;
@@ -307,6 +318,10 @@ void resetAll() {
   winner = -1;
   dmSeconds = 0;
   historyCount = 0;
+  serveTeam = 0;
+  servePlayer[0] = 0;
+  servePlayer[1] = 0;
+  serveChosen = false;
 }
 
 void captureState(GameState *s) {
@@ -321,6 +336,10 @@ void captureState(GameState *s) {
   s->winner = winner;
   s->deathMatchMode = deathMatchMode;
   s->dmSeconds = dmSeconds;
+  s->serveTeam = serveTeam;
+  s->servePlayer[0] = servePlayer[0];
+  s->servePlayer[1] = servePlayer[1];
+  s->serveChosen = serveChosen;
 }
 
 void restoreState(const GameState *s) {
@@ -335,6 +354,10 @@ void restoreState(const GameState *s) {
   winner = s->winner;
   deathMatchMode = s->deathMatchMode;
   dmSeconds = s->dmSeconds;
+  serveTeam = s->serveTeam;
+  servePlayer[0] = s->servePlayer[0];
+  servePlayer[1] = s->servePlayer[1];
+  serveChosen = s->serveChosen;
 }
 
 void pushHistory() {
@@ -420,6 +443,52 @@ void drawWideBorder(CRGB color) {
   }
 }
 
+void advanceServe() {
+  servePlayer[serveTeam] ^= 1;
+  serveTeam ^= 1;
+}
+
+// Tie-break: the player due this game serves the first point only.
+// After that, service blocks are two points, same player order as the set.
+void currentServer(int *teamOut, int *playerOut) {
+  int p0 = servePlayer[0];
+  int p1 = servePlayer[1];
+  int t = serveTeam;
+  if (!inTiebreak) {
+    *teamOut = t;
+    *playerOut = (t == 0) ? p0 : p1;
+    return;
+  }
+  int played = points[0] + points[1];
+  if (played <= 0) {
+    *teamOut = t;
+    *playerOut = (t == 0) ? p0 : p1;
+    return;
+  }
+  played -= 1;
+  if (t == 0) p0 ^= 1;
+  else p1 ^= 1;
+  t ^= 1;
+  while (played >= 2) {
+    played -= 2;
+    if (t == 0) p0 ^= 1;
+    else p1 ^= 1;
+    t ^= 1;
+  }
+  *teamOut = t;
+  *playerOut = (t == 0) ? p0 : p1;
+}
+
+void drawServeDots() {
+  if (!serveChosen) return;
+  int team, player;
+  currentServer(&team, &player);
+  int x = (team == 0) ? 0 : MATRIX_WIDTH - 1;
+  int y = (player == 0) ? 0 : 5;
+  leds[getLED(x, y)] = orangeColor;
+  leds[getLED(x, y + 1)] = orangeColor;
+}
+
 void drawMainScreen() {
   if (matchOver) { drawMatchOverScreen(); return; }
   drawFadedBackground();
@@ -452,6 +521,7 @@ void drawMainScreen() {
     drawSmallText(8, 1, getPointStr(0), getScoreColor(0));
     drawSmallText(17, 1, getPointStr(1), getScoreColor(1));
     drawGameDigit(26, 0, games[1][currentSet], getScoreColor(1));
+    drawServeDots();
   }
   drawAllBatteryBars();
 }
@@ -467,6 +537,7 @@ void drawSecondaryScreen() {
   drawFadedBackground();
   drawSetScores();
   drawWideBorder(greenColor);
+  drawServeDots();
 }
 
 void drawMatchOverScreen() {
@@ -529,6 +600,7 @@ void handleGameWon(int team) {
       inTiebreak = true;
     }
   }
+  advanceServe();
   if (matchOver) {
     drawMatchOverScreen();
     FastLED.show();
@@ -542,8 +614,30 @@ void handleGameWon(int team) {
   }
 }
 
+bool matchIsBlank() {
+  if (deathMatchMode || inTiebreak || matchOver || currentSet) return false;
+  if (points[0] || points[1] || deuceCount || advantageTeam != -1) return false;
+  if (sets[0] || sets[1]) return false;
+  for (int set = 0; set < 3; set++) {
+    if (games[0][set] || games[1][set]) return false;
+  }
+  return true;
+}
+
 void scorePoint(int team) {
   if (matchOver) return;
+  // At 0-0 the first score press picks that side's player 1. It is not a point.
+  if (!serveChosen && matchIsBlank()) {
+    pushHistory();
+    serveTeam = team;
+    servePlayer[0] = 0;
+    servePlayer[1] = 0;
+    serveChosen = true;
+    Serial.printf("Serve started: team %d player 1\n", team + 1);
+    drawMainScreen();
+    FastLED.show();
+    return;
+  }
   pushHistory();
   bool wonGame = false;
   if (deathMatchMode) {
@@ -786,9 +880,12 @@ const uint8_t (*glyphFor(char ch))[3] {
 
 // "PADEL PIXEL" scrolls in from the right and off the left.
 // Each lit pixel keeps one random rainbow colour for the whole pass.
+// Then PADEL, then PIXEL, each centred with the same letter spacing.
 void scrollPadelPixel() {
   struct Lit {
     int8_t x;
+    int8_t word;
+    int8_t localX;
     int8_t y;
     CRGB color;
   };
@@ -796,27 +893,37 @@ void scrollPadelPixel() {
   int n = 0;
   const char text[] = "PADEL PIXEL";
   int cursor = 0;
+  int word = 0;
+  int wordCursor = 0;
   bool gap = false;
   for (int i = 0; text[i] != '\0'; i++) {
     if (text[i] == ' ') {
       cursor += 3;
+      word++;
+      wordCursor = 0;
       gap = false;
       continue;
     }
     const uint8_t (*glyph)[3] = glyphFor(text[i]);
     if (!glyph) continue;
-    if (gap) cursor += 1;
+    if (gap) {
+      cursor += 1;
+      wordCursor += 1;
+    }
     gap = true;
     for (int row = 0; row < 5; row++) {
       for (int col = 0; col < 3; col++) {
         if (!glyph[row][col] || n >= 96) continue;
         px[n].x = cursor + col;
+        px[n].word = word;
+        px[n].localX = wordCursor + col;
         px[n].y = row;
         px[n].color = CHSV(random(256), 255, 255);
         n++;
       }
     }
     cursor += 3;
+    wordCursor += 3;
   }
 
   const int y0 = 1;
@@ -830,6 +937,22 @@ void scrollPadelPixel() {
     }
     FastLED.show();
     delay(60);
+  }
+
+  // Each word is 5 letters with a 1-pixel gap: 19 pixels, centred.
+  const int wordWidth = 19;
+  const int x0 = (MATRIX_WIDTH - wordWidth) / 2;
+  for (int w = 0; w < 2; w++) {
+    fill_solid(leds, NUM_LEDS, CRGB::Black);
+    for (int i = 0; i < n; i++) {
+      if (px[i].word != w) continue;
+      int x = x0 + px[i].localX;
+      int y = y0 + px[i].y;
+      if ((unsigned)x >= MATRIX_WIDTH || (unsigned)y >= MATRIX_HEIGHT) continue;
+      leds[getLED(x, y)] = px[i].color;
+    }
+    FastLED.show();
+    delay(1500);
   }
   fill_solid(leds, NUM_LEDS, CRGB::Black);
   FastLED.show();

@@ -16,10 +16,13 @@
 #include <esp_sleep.h>
 
 #define TEAM 2                    // 1 = blue remote, 2 = red remote
+// 16x16 ESP32-C6 scoreboard, flashed 2026-10-27: 10:BD:A3:A6:18:08
 // Wide 8x32 ESP32-C3 flashed 2026-10-20: 1C:DB:D4:33:66:50
 // Previous wide 8x32: 1C:DB:D4:34:85:BC
 // 16x16 ESP32-C3 scoreboard, flashed 2026-10-17: 1C:DB:D4:33:66:D0
 // Previous 16x16 C3 (2026-10-12): 1C:DB:D4:38:5A:98
+// Blue remote flashed 2026-10-28, base MAC: FC:01:2C:EE:33:E4
+// Red remote flashed 2026-10-28, base MAC: FC:01:2C:EC:C7:AC
 // Blue remote flashed 2026-10-20, base MAC: 10:BD:A3:A6:20:C8
 // Red remote flashed 2026-10-20, base MAC: 10:BD:A3:A6:46:94
 // Earlier blue remote base MAC: 10:BD:A3:A6:16:88
@@ -45,9 +48,9 @@
 CRGB led[NUM_LEDS];
 CRGB teamColor = (TEAM == 1) ? CRGB(0, 30, 255) : CRGB(255, 10, 20);
 
-// Wide 8x32 ESP32-C3 flashed 2026-10-20. Wi-Fi STA MAC read from that board.
+// 16x16 ESP32-C6 flashed 2026-10-27. Wi-Fi STA MAC read from that board.
 // ESP-NOW uses this 6-byte STA MAC, not an EUI-64 form.
-uint8_t scoreboardAddress[] = {0x1C, 0xDB, 0xD4, 0x33, 0x66, 0x50};
+uint8_t scoreboardAddress[] = {0x10, 0xBD, 0xA3, 0xA6, 0x18, 0x08};
 
 struct Message {
   uint8_t cmd;

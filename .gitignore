@@ -2,7 +2,10 @@
 .pio/
 .vscode/
 build/
+**/build/
 *.elf
 *.map
-*.bin
 *.hex
+*.bin
+!firmware/**
+!firmware/**/*.bin

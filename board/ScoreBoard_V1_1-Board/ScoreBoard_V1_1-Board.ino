@@ -4,6 +4,11 @@
 // GPIO 6 = WS2812 matrix | GPIO 7 = mode button
 // GPIO 23 = LED driver EN (held HIGH) | GPIO 0 = battery ADC
 // Board button: <1s = cycle score colors | 1-3s = deathmatch | 3s+ = blackout
+// Serve: two yellow dots on the outer column of the serving side.
+//   Player 1 is the top two pixels. Player 2 is the pair between the game and the points.
+//   At 0-0 the first score press only starts that side's player 1. It does not add a point.
+//   Service then changes each game. In a tie-break the due server serves one point,
+//   then each player serves two in the same order.
 // Blackout keeps ESP-NOW up. One yellow/green pixel hops; the rest of the matrix is off.
 // No deep sleep or Wi-Fi power save.
 // Color modes: 0 both white | 1 blue/red teams | 2+ shared rainbow
@@ -122,6 +127,9 @@ int blackoutY = 0;
 bool blackoutGreen = false;
 unsigned long lastBlackoutHop = 0;
 uint8_t colorMode = 0;
+int serveTeam = 0;
+int servePlayer[2] = {0, 0};
+bool serveChosen = false;
 unsigned long dmStartTime = 0;
 int dmSeconds = 0;
 
@@ -146,6 +154,9 @@ struct GameState {
   int winner;
   bool deathMatchMode;
   int dmSeconds;
+  int serveTeam;
+  int servePlayer[2];
+  bool serveChosen;
 };
 GameState history[HISTORY_LEN];
 int historyCount = 0;
@@ -296,6 +307,10 @@ void resetAll() {
   winner = -1;
   dmSeconds = 0;
   historyCount = 0;
+  serveTeam = 0;
+  servePlayer[0] = 0;
+  servePlayer[1] = 0;
+  serveChosen = false;
 }
 
 void captureState(GameState *s) {
@@ -310,6 +325,10 @@ void captureState(GameState *s) {
   s->winner = winner;
   s->deathMatchMode = deathMatchMode;
   s->dmSeconds = dmSeconds;
+  s->serveTeam = serveTeam;
+  s->servePlayer[0] = servePlayer[0];
+  s->servePlayer[1] = servePlayer[1];
+  s->serveChosen = serveChosen;
 }
 
 void restoreState(const GameState *s) {
@@ -324,6 +343,10 @@ void restoreState(const GameState *s) {
   winner = s->winner;
   deathMatchMode = s->deathMatchMode;
   dmSeconds = s->dmSeconds;
+  serveTeam = s->serveTeam;
+  servePlayer[0] = s->servePlayer[0];
+  servePlayer[1] = s->servePlayer[1];
+  serveChosen = s->serveChosen;
 }
 
 void pushHistory() {
@@ -407,6 +430,62 @@ CRGB getSetScoreColor(int team, int set) {
   return dimScoreColor(color);
 }
 
+void advanceServe() {
+  servePlayer[serveTeam] ^= 1;
+  serveTeam ^= 1;
+}
+
+// Tie-break: the player due this game serves the first point only.
+// After that, service blocks are two points, same player order as the set.
+void currentServer(int *teamOut, int *playerOut) {
+  int p0 = servePlayer[0];
+  int p1 = servePlayer[1];
+  int t = serveTeam;
+  if (!inTiebreak) {
+    *teamOut = t;
+    *playerOut = (t == 0) ? p0 : p1;
+    return;
+  }
+  int played = points[0] + points[1];
+  if (played <= 0) {
+    *teamOut = t;
+    *playerOut = (t == 0) ? p0 : p1;
+    return;
+  }
+  played -= 1;
+  if (t == 0) p0 ^= 1;
+  else p1 ^= 1;
+  t ^= 1;
+  while (played >= 2) {
+    played -= 2;
+    if (t == 0) p0 ^= 1;
+    else p1 ^= 1;
+    t ^= 1;
+  }
+  *teamOut = t;
+  *playerOut = (t == 0) ? p0 : p1;
+}
+
+void drawServeDots() {
+  if (!serveChosen) return;
+  int team, player;
+  currentServer(&team, &player);
+  int x = (team == 0) ? 0 : MATRIX_WIDTH - 1;
+  int y = (player == 0) ? 0 : 8;
+  leds[getLED(x, y)] = yellowColor;
+  leds[getLED(x, y + 1)] = yellowColor;
+}
+
+bool matchIsBlank() {
+  if (deathMatchMode || inTiebreak || matchOver || currentSet) return false;
+  if (points[0] || points[1] || deuceCount || advantageTeam != -1) return false;
+  if (sets[0] || sets[1]) return false;
+  for (int set = 0; set < 3; set++) {
+    if (games[0][set] || games[1][set]) return false;
+  }
+  return true;
+}
+
 void drawMainScreen() {
   if (matchOver) { drawMatchOverScreen(); return; }
   if (deathMatchMode) {
@@ -432,6 +511,7 @@ void drawMainScreen() {
     drawLargeDigit(10, 0, games[1][currentSet], getScoreColor(1));
     drawSmallText(0, 10, getPointStr(0), getScoreColor(0));
     drawSmallText(9, 10, getPointStr(1), getScoreColor(1));
+    drawServeDots();
   }
   drawAllBatteryBars();
 }
@@ -458,6 +538,7 @@ void drawSecondaryScreen() {
   drawSetScores(team1Leads);
   for (int x = 0; x < 16; x++) { leds[getLED(x,0)] = greenColor; leds[getLED(x,15)] = greenColor; }
   for (int y = 0; y < 16; y++) { leds[getLED(0,y)] = greenColor; leds[getLED(15,y)] = greenColor; }
+  drawServeDots();
 }
 
 void drawMatchOverScreen() {
@@ -521,6 +602,7 @@ void handleGameWon(int team) {
       inTiebreak = true;
     }
   }
+  advanceServe();
   if (blackout) return;
   if (matchOver) {
     drawMatchOverScreen();
@@ -537,6 +619,20 @@ void handleGameWon(int team) {
 
 void scorePoint(int team) {
   if (matchOver) return;
+  // At 0-0 the first score press picks that side's player 1. It is not a point.
+  if (!serveChosen && matchIsBlank()) {
+    pushHistory();
+    serveTeam = team;
+    servePlayer[0] = 0;
+    servePlayer[1] = 0;
+    serveChosen = true;
+    Serial.printf("Serve started: team %d player 1\n", team + 1);
+    if (!blackout) {
+      drawMainScreen();
+      FastLED.show();
+    }
+    return;
+  }
   pushHistory();
   bool wonGame = false;
   if (deathMatchMode) {

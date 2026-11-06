@@ -2,7 +2,7 @@
 
 ESP-NOW padel scoreboard and handheld remote.
 
-Current release: **v1.2**. v1.1 and v1.0 remain in the tree for reference.
+Current release: **v1.2** (C3 16×16 / wide 8×32, with serve dots also back-ported to the C6 v1.1 board). v2.0 interim, Tab5, v1.1 remotes, and v1.0 remain in the tree.
 
 ## What’s in this repo
 
@@ -10,8 +10,10 @@ Current release: **v1.2**. v1.1 and v1.0 remain in the tree for reference.
 |---|---|---|---|
 | **v1.2** | 16×16 scoreboard | ESP32-C3 | `board/ScoreBoard_16x16_C3/` |
 | **v1.2** | Wide 8×32 scoreboard | ESP32-C3 | `board/ScoreBoard_Wide_8x32/` |
-| **v1.1** | Scoreboard | ESP32-C6 | `board/ScoreBoard_V1_1-Board/` |
+| **v1.1** | Scoreboard (serve dots) | ESP32-C6 | `board/ScoreBoard_V1_1-Board/` |
 | **v1.1** | Remote (one per team) | ESP32-C6 | `remote/Scoreboard_V1_1-Remote/` |
+| v2.0 (interim) | Scoreboard | ESP32-C6 | `board/ScoreBoard_V2_Final-Board/` |
+| Tab5 | LCD scoreboard + C6 radio hook | M5Stack Tab5 / ESP32-C6 | `board/PadelScoreboardTab5/` |
 | v1.0 | Scoreboard | ESP32-C3 | `board/ScoreBoard_V1_Final-Board/` |
 | v1.0 | Remote (one for both teams) | ESP32-C6 | `remote/Scoreboard_Final_V1-Remote/` |
 
@@ -24,6 +26,8 @@ The sketches talk over ESP-NOW. No Wi-Fi router is required. v1.1 remotes are ha
 - Mode button on **GPIO 7**
 - LED driver enable on **GPIO 23** (held HIGH; this board does not sleep)
 - Battery ADC on **GPIO 0**
+
+Yellow serve dots match the ESP32-C3 16×16 below. Pinout is unchanged.
 
 **Remote (ESP32-C6, one unit per team)**
 - WS2812 LED on **GPIO 7**
@@ -159,6 +163,31 @@ arduino-cli compile --upload -p /dev/cu.usbmodem101 \
 | Tag | Notes |
 |---|---|
 | **v1.0** | C3 scoreboard + one two-button C6 remote for both teams |
-| **v1.1** | C6 V2 scoreboard: white-first colours, 20 ms team flash, undo/deathmatch from remote, MAC on Serial; per-team remotes with v1.1 buttons, 5 s breathe, GPIO wake |
-| **wide-8x32** | C3 wide scoreboard: 8×32 column-serpentine matrix, same v1.1 remotes, 40-minute sleep, GPIO 7 wake |
+| **v2.0-interim** | C6 scoreboard snapshot (`ScoreBoard_V2_Final-Board`) before v1.1 serve/blackout work |
+| **v1.1** | C6 scoreboard: white-first colours, 20 ms team flash, undo/deathmatch from remote, MAC on Serial, yellow serve dots; per-team remotes with v1.1 buttons, 5 s breathe, GPIO wake |
+| **wide-8x32** | C3 wide scoreboard: 8×32 column-serpentine matrix, same v1.1 remotes, 40-minute sleep, GPIO 5 wake |
 | **v1.2** | 16×16 ESP32-C3 (GPIO 6 matrix, GPIO 5 button, yellow serve dots, blackout) and wide 8×32 (GPIO 6 matrix, GPIO 5 wake, orange serve dots, PADEL then PIXEL after the boot scroll). Remotes stay on the v1.1 protocol |
+| **tab5** | M5Stack Tab5 LCD scoreboard + ESP32-C6 padel radio hooks; prebuilt bins under `firmware/` |
+
+## Prebuilt firmware
+
+Flashable binaries for the Tab5 build live in `firmware/`. They match the Tab5 sources from 2026-10-23.
+
+| File | What |
+|---|---|
+| `firmware/PadelScoreboardTab5.ino.merged.bin` | Preferred full Tab5 flash image (flash at 0x0) |
+| `firmware/PadelScoreboardTab5.ino.bin` | Tab5 app partition only |
+| `firmware/PadelScoreboardTab5.ino.bootloader.bin` | Tab5 bootloader |
+| `firmware/PadelScoreboardTab5.ino.partitions.bin` | Tab5 partition table |
+| `firmware/PadelScoreboardTab5-c6-network_adapter.bin` | ESP32-C6 network-adapter / ESP-Hosted build with padel hooks |
+
+Arduino ESP32-C3 / ESP32-C6 scoreboard and remote sketches have **no matching prebuilt `.bin` in this repo yet** (sources are current; rebuild locally with the `arduino-cli` commands below).
+
+## Tab5 scoreboard
+
+See `board/PadelScoreboardTab5/README.md`. The Arduino sketch under `arduino/PadelScoreboardTab5/` is the one to flash to the Tab5. `src/` is the same code for PlatformIO / host test. `c6/main/padel.*` are the padel-specific hooks for the ESP32-C6 coprocessor; the rest of the ESP-Hosted vendor tree is not vendored here.
+
+## ScoreBoard V2 Final (interim C6)
+
+`board/ScoreBoard_V2_Final-Board/` is the July 2026 ESP32-C6 board that sits between v1.0 and v1.1. Prefer `ScoreBoard_V1_1-Board` for new flashes (serve dots, blackout hop, same pinout).
+

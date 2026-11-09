@@ -11,7 +11,7 @@
 //   then each player serves two in the same order.
 // Blackout keeps ESP-NOW up. One yellow/green pixel hops; the rest of the matrix is off.
 // No deep sleep or Wi-Fi power save.
-// Color modes: 0 both white | 1 blue/red teams | 2+ shared rainbow
+// Color modes: 0 teams-on-black | 1 white on blue/red | 2 teams | 3 yellow | 4 red | 5 white on black
 // ESP-NOW: 0 score, 1 undo, 99 reset, 100 battery, 101 sleep, 102 deathmatch
 // Wi-Fi STA MAC is this chip's own address, printed on Serial at boot.
 // Remotes stay paired to whichever board they were hardcoded for.
@@ -42,13 +42,16 @@
 #define BLACKOUT_HOP_MS 500
 #define DM_MAX_SECONDS 3600         // 60 minutes
 
-#define COLOR_MODE_WHITE 0
-#define COLOR_MODE_TEAMS 1
-const CRGB rainbowColors[] = {
-  CRGB::Orange, CRGB::Yellow, CRGB::Green,
-  CRGB::Cyan, CRGB::Blue, CRGB::Purple, CRGB::Red
-};
-#define NUM_COLOR_MODES (2 + (sizeof(rainbowColors) / sizeof(rainbowColors[0])))
+// Colour cycle (digits / background):
+// 0 blue|red on black, 1 white on blue|red, 2 blue|red on blue|red,
+// 3 yellow on blue|red, 4 red on blue|red, 5 white on black
+#define COLOR_MODE_TEAMS_BLACK 0
+#define COLOR_MODE_WHITE 1
+#define COLOR_MODE_TEAMS 2
+#define COLOR_MODE_YELLOW 3
+#define COLOR_MODE_RED 4
+#define COLOR_MODE_WHITE_BLACK 5
+#define NUM_COLOR_MODES 6
 
 CRGB leds[NUM_LEDS];
 CRGB team1Color = CRGB(0, 30, 255);
@@ -126,7 +129,7 @@ int blackoutX = 0;
 int blackoutY = 0;
 bool blackoutGreen = false;
 unsigned long lastBlackoutHop = 0;
-uint8_t colorMode = 0;
+uint8_t colorMode = COLOR_MODE_TEAMS_BLACK;
 int serveTeam = 0;
 int servePlayer[2] = {0, 0};
 bool serveChosen = false;
@@ -387,11 +390,17 @@ CRGB brighten40(CRGB color) {
   );
 }
 
+bool isBlackBackground() {
+  return colorMode == COLOR_MODE_TEAMS_BLACK || colorMode == COLOR_MODE_WHITE_BLACK;
+}
+
 CRGB getFadedTeam1() {
+  if (isBlackBackground()) return blackColor;
   return (colorMode == COLOR_MODE_TEAMS) ? fadedTeam1 : brighten40(fadedTeam1);
 }
 
 CRGB getFadedTeam2() {
+  if (isBlackBackground()) return blackColor;
   return (colorMode == COLOR_MODE_TEAMS) ? fadedTeam2 : brighten40(fadedTeam2);
 }
 
@@ -416,17 +425,21 @@ CRGB dimScoreColor(CRGB color) {
 }
 
 CRGB getScoreColor(int team) {
-  if (colorMode == COLOR_MODE_WHITE) return whiteColor;
-  if (colorMode == COLOR_MODE_TEAMS) return (team == 0) ? team1Color : team2Color;
-  return rainbowColors[colorMode - 2];
+  switch (colorMode) {
+    case COLOR_MODE_TEAMS:
+    case COLOR_MODE_TEAMS_BLACK: return (team == 0) ? team1Color : team2Color;
+    case COLOR_MODE_YELLOW: return yellowColor;
+    case COLOR_MODE_RED: return CRGB::Red;
+    default: return whiteColor;  // COLOR_MODE_WHITE, COLOR_MODE_WHITE_BLACK
+  }
 }
 
 CRGB getSetScoreColor(int team, int set) {
   bool played = (set <= currentSet);
   CRGB color = getScoreColor(team);
   if (played) return color;
-  if (colorMode == COLOR_MODE_WHITE) return dimWhite;
-  if (colorMode == COLOR_MODE_TEAMS) return (team == 0) ? dimTeam1 : dimTeam2;
+  if (colorMode == COLOR_MODE_WHITE || colorMode == COLOR_MODE_WHITE_BLACK) return dimWhite;
+  if (colorMode == COLOR_MODE_TEAMS || colorMode == COLOR_MODE_TEAMS_BLACK) return (team == 0) ? dimTeam1 : dimTeam2;
   return dimScoreColor(color);
 }
 
@@ -492,15 +505,21 @@ void drawMainScreen() {
     drawHorizontalFadedBackground(true);
     int m = dmSeconds / 60;
     int s = dmSeconds % 60;
+    if (m > 99) m = 99;
     if (m >= 10) {
+      // MM:SS needs 12 digit columns + colon; minutes x0-6, gap x7,
+      // colon x8, seconds x9-15 (was 4-6 under the x6 colon).
       drawSmallDigit(0, 2, m / 10, deathTeam1Color);
       drawSmallDigit(4, 2, m % 10, deathTeam1Color);
+      leds[getLED(8, 3)] = whiteColor; leds[getLED(8, 4)] = whiteColor;
+      drawSmallDigit(9, 2, s/10, deathTeam2Color);
+      drawSmallDigit(13, 2, s%10, deathTeam2Color);
     } else {
       drawSmallDigit(2, 2, m, deathTeam1Color);
+      leds[getLED(6, 3)] = whiteColor; leds[getLED(6, 4)] = whiteColor;
+      drawSmallDigit(8, 2, s/10, deathTeam2Color);
+      drawSmallDigit(12, 2, s%10, deathTeam2Color);
     }
-    leds[getLED(6, 3)] = whiteColor; leds[getLED(6, 4)] = whiteColor;
-    drawSmallDigit(8, 2, s/10, deathTeam2Color);
-    drawSmallDigit(12, 2, s%10, deathTeam2Color);
     char buf1[3]; sprintf(buf1, "%02d", points[0]);
     char buf2[3]; sprintf(buf2, "%02d", points[1]);
     drawSmallText(0, 10, buf1, deathTeam1Color);

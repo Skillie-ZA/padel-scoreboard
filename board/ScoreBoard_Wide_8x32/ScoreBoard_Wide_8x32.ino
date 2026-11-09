@@ -20,7 +20,7 @@
 //   At 0-0 the first score press only starts that side's player 1. It does not add a point.
 //   Service then changes each game. In a tie-break the due server serves one point,
 //   then each player serves two in the same order.
-// Color modes: 0 both white | 1 blue/red teams | 2+ shared rainbow
+// Color modes: 0 white | 1 teams | 2 yellow | 3 red (on blue/red) | 4 teams | 5 white (on black)
 // ESP-NOW: 0 score, 1 undo, 99 reset, 100 battery, 101 sleep, 102 deathmatch
 // ===============================================
 
@@ -48,13 +48,16 @@
 #define INACTIVITY_TIMEOUT 2400000UL  // 40 minutes
 #define DM_MAX_SECONDS 3600            // 60 minutes
 
-#define COLOR_MODE_WHITE 0
-#define COLOR_MODE_TEAMS 1
-const CRGB rainbowColors[] = {
-  CRGB::Orange, CRGB::Yellow, CRGB::Green,
-  CRGB::Cyan, CRGB::Blue, CRGB::Purple, CRGB::Red
-};
-#define NUM_COLOR_MODES (2 + (sizeof(rainbowColors) / sizeof(rainbowColors[0])))
+// Colour cycle (digits / background):
+// 0 white on blue|red, 1 blue|red on blue|red, 2 yellow on blue|red,
+// 3 red on blue|red, 4 blue|red on black, 5 white on black
+#define COLOR_MODE_WHITE 1
+#define COLOR_MODE_TEAMS 2
+#define COLOR_MODE_YELLOW 3
+#define COLOR_MODE_RED 4
+#define COLOR_MODE_TEAMS_BLACK 0
+#define COLOR_MODE_WHITE_BLACK 5
+#define NUM_COLOR_MODES 6
 
 CRGB leds[NUM_LEDS];
 CRGB team1Color = CRGB(0, 30, 255);
@@ -141,7 +144,7 @@ bool matchOver = false;
 int winner = -1;
 
 bool deathMatchMode = false;
-uint8_t colorMode = 0;
+uint8_t colorMode = COLOR_MODE_TEAMS_BLACK;
 int serveTeam = 0;
 int servePlayer[2] = {0, 0};
 bool serveChosen = false;
@@ -398,11 +401,17 @@ CRGB brighten40(CRGB color) {
   );
 }
 
+bool isBlackBackground() {
+  return colorMode == COLOR_MODE_TEAMS_BLACK || colorMode == COLOR_MODE_WHITE_BLACK;
+}
+
 CRGB getFadedTeam1() {
+  if (isBlackBackground()) return blackColor;
   return (colorMode == COLOR_MODE_TEAMS) ? fadedTeam1 : brighten40(fadedTeam1);
 }
 
 CRGB getFadedTeam2() {
+  if (isBlackBackground()) return blackColor;
   return (colorMode == COLOR_MODE_TEAMS) ? fadedTeam2 : brighten40(fadedTeam2);
 }
 
@@ -418,17 +427,21 @@ CRGB dimScoreColor(CRGB color) {
 }
 
 CRGB getScoreColor(int team) {
-  if (colorMode == COLOR_MODE_WHITE) return whiteColor;
-  if (colorMode == COLOR_MODE_TEAMS) return (team == 0) ? team1Color : team2Color;
-  return rainbowColors[colorMode - 2];
+  switch (colorMode) {
+    case COLOR_MODE_TEAMS:
+    case COLOR_MODE_TEAMS_BLACK: return (team == 0) ? team1Color : team2Color;
+    case COLOR_MODE_YELLOW: return yellowColor;
+    case COLOR_MODE_RED: return CRGB::Red;
+    default: return whiteColor;  // COLOR_MODE_WHITE, COLOR_MODE_WHITE_BLACK
+  }
 }
 
 CRGB getSetScoreColor(int team, int set) {
   bool played = (set <= currentSet);
   CRGB color = getScoreColor(team);
   if (played) return color;
-  if (colorMode == COLOR_MODE_WHITE) return dimWhite;
-  if (colorMode == COLOR_MODE_TEAMS) return (team == 0) ? dimTeam1 : dimTeam2;
+  if (colorMode == COLOR_MODE_WHITE || colorMode == COLOR_MODE_WHITE_BLACK) return dimWhite;
+  if (colorMode == COLOR_MODE_TEAMS || colorMode == COLOR_MODE_TEAMS_BLACK) return (team == 0) ? dimTeam1 : dimTeam2;
   return dimScoreColor(color);
 }
 
@@ -495,7 +508,9 @@ void drawMainScreen() {
   if (deathMatchMode) {
     // Outer pairs are the scores. Inner pairs are the clock.
     // The tens minute stays blank until 10:00, but its column is reserved.
-    // The colon owns the two centre columns, so scores and seconds do not move.
+    // Layout: score x0-6 | minutes x7-13 | gap | colon x15 | gap | seconds x17-23 | gap | score x25-31.
+    // 32 columns can't hold a 1px gap everywhere, so the left score butts the
+    // (green) minutes; the colon gets clear space on both sides.
     const int y = 1;
     int p0 = points[0]; if (p0 < 0) p0 = 0; if (p0 > 99) p0 = 99;
     int p1 = points[1]; if (p1 < 0) p1 = 0; if (p1 > 99) p1 = 99;
@@ -506,12 +521,10 @@ void drawMainScreen() {
     int m = dmSeconds / 60;
     int s = dmSeconds % 60;
     if (m > 99) m = 99;
-    if (m >= 10) drawSmallDigit(8, y, m / 10, greenColor);
-    drawSmallDigit(12, y, m % 10, greenColor);
+    if (m >= 10) drawSmallDigit(7, y, m / 10, greenColor);
+    drawSmallDigit(11, y, m % 10, greenColor);
     leds[getLED(15, y + 1)] = greenColor;
-    leds[getLED(16, y + 1)] = greenColor;
     leds[getLED(15, y + 3)] = greenColor;
-    leds[getLED(16, y + 3)] = greenColor;
     drawSmallDigit(17, y, s / 10, greenColor);
     drawSmallDigit(21, y, s % 10, greenColor);
 
